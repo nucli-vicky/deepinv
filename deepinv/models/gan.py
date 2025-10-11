@@ -156,6 +156,15 @@ class ESRGANDiscriminator(nn.Module):
         return self.model(x)
 
 
+class RealESRGANDiscriminator(nn.Module):
+    r"""Real-ESRGAN Discriminator.
+
+    The Real-ESRGAN discriminator model was originally proposed by :footcite:t:`wang2021realesrgan`.
+    Implementation taken from https://github.com/xinntao/Real-ESRGAN/blob/master/realesrgan/archs/discriminator_arch.py
+    """
+    def __init__(self, in_nc, num_feat : int, skip_connection : bool=True)
+
+
 class DCGANDiscriminator(nn.Module):
     r"""DCGAN Discriminator.
 
