@@ -3,6 +3,7 @@ import numpy as np
 from tqdm import tqdm
 
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 from torch import rand
 from torch.optim import Adam
@@ -159,10 +160,61 @@ class ESRGANDiscriminator(nn.Module):
 class RealESRGANDiscriminator(nn.Module):
     r"""Real-ESRGAN Discriminator.
 
-    The Real-ESRGAN discriminator model was originally proposed by :footcite:t:`wang2021realesrgan`.
+    The Real-ESRGAN discriminator model was originally proposed by :footcite:t:`wang2021real`.
     Implementation taken from https://github.com/xinntao/Real-ESRGAN/blob/master/realesrgan/archs/discriminator_arch.py
     """
-    def __init__(self, in_nc, num_feat : int, skip_connection : bool=True)
+
+    def __init__(
+        self, in_nc, num_feat: int, skip_connection: bool = True, dim: int | str = 2
+    ):
+        super(RealESRGANDiscriminator, self).__init__()
+        self.skip_connection = skip_connection
+        norm = nn.spectral_norm
+        conv = {"2": nn.Conv2d, "3": nn.Conv3d}[str(dim)]
+        self.conv0 = conv(in_nc, num_feat, kernel_size=3, stride=1, padding=1)
+        # downsample
+        self.conv1 = norm(conv(num_feat, num_feat * 2, 4, 2, 1, bias=False))
+        self.conv2 = norm(conv(num_feat * 2, num_feat * 4, 4, 2, 1, bias=False))
+        self.conv3 = norm(conv(num_feat * 4, num_feat * 8, 4, 2, 1, bias=False))
+        # upsample
+        self.conv4 = norm(conv(num_feat * 8, num_feat * 4, 3, 1, 1, bias=False))
+        self.conv5 = norm(conv(num_feat * 4, num_feat * 2, 3, 1, 1, bias=False))
+        self.conv6 = norm(conv(num_feat * 2, num_feat, 3, 1, 1, bias=False))
+        # extra convolutions
+        self.conv7 = norm(conv(num_feat, num_feat, 3, 1, 1, bias=False))
+        self.conv8 = norm(conv(num_feat, num_feat, 3, 1, 1, bias=False))
+        self.conv9 = conv(num_feat, 1, 3, 1, 1)
+
+    def forward(self, x):
+        # downsample
+        x0 = F.leaky_relu(self.conv0(x), negative_slope=0.2, inplace=True)
+        x1 = F.leaky_relu(self.conv1(x0), negative_slope=0.2, inplace=True)
+        x2 = F.leaky_relu(self.conv2(x1), negative_slope=0.2, inplace=True)
+        x3 = F.leaky_relu(self.conv3(x2), negative_slope=0.2, inplace=True)
+
+        # upsample
+        x3 = F.interpolate(x3, scale_factor=2, mode="bilinear", align_corners=False)
+        x4 = F.leaky_relu(self.conv4(x3), negative_slope=0.2, inplace=True)
+
+        if self.skip_connection:
+            x4 = x4 + x2
+        x4 = F.interpolate(x4, scale_factor=2, mode="bilinear", align_corners=False)
+        x5 = F.leaky_relu(self.conv5(x4), negative_slope=0.2, inplace=True)
+
+        if self.skip_connection:
+            x5 = x5 + x1
+        x5 = F.interpolate(x5, scale_factor=2, mode="bilinear", align_corners=False)
+        x6 = F.leaky_relu(self.conv6(x5), negative_slope=0.2, inplace=True)
+
+        if self.skip_connection:
+            x6 = x6 + x0
+
+        # extra convolutions
+        out = F.leaky_relu(self.conv7(x6), negative_slope=0.2, inplace=True)
+        out = F.leaky_relu(self.conv8(out), negative_slope=0.2, inplace=True)
+        out = self.conv9(out)
+
+        return out
 
 
 class DCGANDiscriminator(nn.Module):
