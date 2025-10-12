@@ -167,12 +167,19 @@ class RealESRGANDiscriminator(nn.Module):
 
     def __init__(
         self,
-        in_nc: int,
+        in_nc: int = 3,
         num_feat: int | tuple = 64,
         skip_connection: bool = True,
         dim: int | str = 2,
         pretrained: str | None = None,
     ):
+        r"""
+        :param int in_nc: number of input channels.
+        :param int | tuple num_feat: number of features in conv layers. If int, will be converted to (num_feat, num_feat*2, num_feat*4, num_feat*8).
+        :param bool skip_connection: whether to use skip connections.
+        :param int | str dim: spatial dimension of the convolutions and input tensors, either 2 or 3.
+        :param str | None pretrained: whether to load pretrained weights. Only available for the default network. Either None, 'x2' or 'x4'.
+        """
         super(RealESRGANDiscriminator, self).__init__()
         if isinstance(num_feat, int):
             num_feat = (num_feat, num_feat * 2, num_feat * 4, num_feat * 8)

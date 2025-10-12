@@ -48,6 +48,8 @@ The discriminator network :math:`D` can be implemented with one of the following
      - Enhanced Super-Resolution GAN discriminator model
    * - :class:`PatchGANDiscriminator <deepinv.models.PatchGANDiscriminator>`
      - PatchGAN discriminator model
+   * - :class:`RealESRGANDiscriminator <deepinv.models.RealESRGANDiscriminator>`
+     - Real-ESRGAN discriminator model (U-Net with spectral normalization), with optional pretrained weights.
 
 
 Unconditional GAN
