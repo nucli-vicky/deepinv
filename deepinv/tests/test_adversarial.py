@@ -63,7 +63,7 @@ def choose_adversarial_combo(combo_name, imsize, device):
             in_nc=imsize[0], num_feat=8, skip_connection=True, dim=2
         ).to(device)
         gen_loss = [
-            dinv.loss.SupLoss(torch.nn.L1Loss),
+            dinv.loss.SupLoss(torch.nn.L1Loss()),
             adversarial.SupAdversarialGeneratorLoss(device=device),
         ]
         dis_loss = adversarial.SupAdversarialDiscriminatorLoss(device=device)
