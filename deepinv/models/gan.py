@@ -216,7 +216,7 @@ class RealESRGANDiscriminator(nn.Module):
             )
             self.load_state_dict(state_dict["params"], strict=True)
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         # downsample
         x0 = F.leaky_relu(self.conv0(x), negative_slope=0.2, inplace=True)
         x1 = F.leaky_relu(self.conv1(x0), negative_slope=0.2, inplace=True)
