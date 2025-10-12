@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torch import rand
 from torch.optim import Adam
+from torch.hub import load_state_dict_from_url
 from deepinv.physics import Physics
 from deepinv.loss import MCLoss
 from .base import Reconstructor
@@ -167,27 +168,53 @@ class RealESRGANDiscriminator(nn.Module):
     def __init__(
         self,
         in_nc: int,
-        num_feat: int = 64,
+        num_feat: int | tuple = 64,
         skip_connection: bool = True,
         dim: int | str = 2,
+        pretrained: str | None = None,
     ):
         super(RealESRGANDiscriminator, self).__init__()
+        if isinstance(num_feat, int):
+            num_feat = (num_feat, num_feat * 2, num_feat * 4, num_feat * 8)
+        if len(num_feat) != 4:
+            print(num_feat)
+            print(len(num_feat))
+            raise ValueError("num_feat must be an int or a tuple of length 4.")
+
         self.skip_connection = skip_connection
         norm = nn.utils.spectral_norm
         conv = {"2": nn.Conv2d, "3": nn.Conv3d}[str(dim)]
-        self.conv0 = conv(in_nc, num_feat, kernel_size=3, stride=1, padding=1)
+        self.conv0 = conv(in_nc, num_feat[0], kernel_size=3, stride=1, padding=1)
         # downsample
-        self.conv1 = norm(conv(num_feat, num_feat * 2, 4, 2, 1, bias=False))
-        self.conv2 = norm(conv(num_feat * 2, num_feat * 4, 4, 2, 1, bias=False))
-        self.conv3 = norm(conv(num_feat * 4, num_feat * 8, 4, 2, 1, bias=False))
+        self.conv1 = norm(conv(num_feat[0], num_feat[1], 4, 2, 1, bias=False))
+        self.conv2 = norm(conv(num_feat[1], num_feat[2], 4, 2, 1, bias=False))
+        self.conv3 = norm(conv(num_feat[2], num_feat[3], 4, 2, 1, bias=False))
         # upsample
-        self.conv4 = norm(conv(num_feat * 8, num_feat * 4, 3, 1, 1, bias=False))
-        self.conv5 = norm(conv(num_feat * 4, num_feat * 2, 3, 1, 1, bias=False))
-        self.conv6 = norm(conv(num_feat * 2, num_feat, 3, 1, 1, bias=False))
+        self.conv4 = norm(conv(num_feat[3], num_feat[2], 3, 1, 1, bias=False))
+        self.conv5 = norm(conv(num_feat[2], num_feat[1], 3, 1, 1, bias=False))
+        self.conv6 = norm(conv(num_feat[1], num_feat[0], 3, 1, 1, bias=False))
         # extra convolutions
-        self.conv7 = norm(conv(num_feat, num_feat, 3, 1, 1, bias=False))
-        self.conv8 = norm(conv(num_feat, num_feat, 3, 1, 1, bias=False))
-        self.conv9 = conv(num_feat, 1, 3, 1, 1)
+        self.conv7 = norm(conv(num_feat[0], num_feat[0], 3, 1, 1, bias=False))
+        self.conv8 = norm(conv(num_feat[0], num_feat[0], 3, 1, 1, bias=False))
+        self.conv9 = conv(num_feat[0], 1, 3, 1, 1)
+
+        if pretrained is not None:
+            if pretrained not in ["x2", "x4"]:
+                raise ValueError("pretrained must be one of [None, 'x2', 'x4']")
+            if (
+                dim != 2
+                or num_feat != (64, 128, 256, 512)
+                or in_nc != 3
+                or not skip_connection
+            ):
+                raise ValueError(
+                    "Pretrained models only available in 2D, with settings num_feat=(64,128,256,512), in_nc=3 and skip_connection=True"
+                )
+            url = f"https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.3/RealESRGAN_{pretrained}plus_netD.pth"
+            state_dict = load_state_dict_from_url(
+                url, progress=True, map_location="cpu", weights_only=True
+            )
+            self.load_state_dict(state_dict["params"], strict=True)
 
     def forward(self, x):
         # downsample
