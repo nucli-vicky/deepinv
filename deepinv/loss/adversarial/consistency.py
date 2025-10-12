@@ -78,7 +78,7 @@ class SupAdversarialDiscriminatorLoss(DiscriminatorLoss):
         :param torch.Tensor x_net: reconstructed image
         :param torch.nn.Module D: discriminator model. If None, then D passed from __init__ used. Defaults to None.
         """
-        return self.adversarial_loss(x, x_net, D) * 0.5
+        return self.adversarial_loss(x, x_net, D) * 0.5  # what? why multiply by 0.5?
 
 
 class UnsupAdversarialGeneratorLoss(GeneratorLoss):

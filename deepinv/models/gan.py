@@ -165,11 +165,15 @@ class RealESRGANDiscriminator(nn.Module):
     """
 
     def __init__(
-        self, in_nc, num_feat: int, skip_connection: bool = True, dim: int | str = 2
+        self,
+        in_nc: int,
+        num_feat: int = 64,
+        skip_connection: bool = True,
+        dim: int | str = 2,
     ):
         super(RealESRGANDiscriminator, self).__init__()
         self.skip_connection = skip_connection
-        norm = nn.spectral_norm
+        norm = nn.utils.spectral_norm
         conv = {"2": nn.Conv2d, "3": nn.Conv3d}[str(dim)]
         self.conv0 = conv(in_nc, num_feat, kernel_size=3, stride=1, padding=1)
         # downsample

@@ -22,6 +22,7 @@ from .icnn import ICNN
 from .gan import (
     PatchGANDiscriminator,
     ESRGANDiscriminator,
+    RealESRGANDiscriminator,
     CSGMGenerator,
     DCGANGenerator,
     DCGANDiscriminator,

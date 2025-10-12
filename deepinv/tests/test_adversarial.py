@@ -9,7 +9,7 @@ from deepinv.loss import adversarial
 # NOTE: They're injected in tests as fixtures.
 from test_loss import dataset, physics  # noqa: F401
 
-ADVERSARIAL_COMBOS = ["DeblurGAN", "CSGM", "AmbientGAN", "UAIR"]
+ADVERSARIAL_COMBOS = ["DeblurGAN", "CSGM", "AmbientGAN", "UAIR", "RealESRGAN"]
 
 
 @pytest.fixture
@@ -57,6 +57,16 @@ def choose_adversarial_combo(combo_name, imsize, device):
         discrimin = dinv.models.DCGANDiscriminator(ndf=8, nc=imsize[0]).to(device)
         gen_loss = adversarial.UnsupAdversarialGeneratorLoss(device=device)
         dis_loss = adversarial.UnsupAdversarialDiscriminatorLoss(device=device)
+    elif combo_name == "RealESRGAN":
+        generator = unet
+        discrimin = dinv.models.RealESRGANDiscriminator(
+            in_nc=imsize[0], num_feat=8, skip_connection=True, dim=2
+        ).to(device)
+        gen_loss = [
+            dinv.loss.SupLoss(torch.nn.L1Loss),
+            adversarial.SupAdversarialGeneratorLoss(device=device),
+        ]
+        dis_loss = adversarial.SupAdversarialDiscriminatorLoss(device=device)
 
     return generator, discrimin, gen_loss, dis_loss
 
