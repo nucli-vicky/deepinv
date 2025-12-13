@@ -10,6 +10,12 @@ from deepinv.loss import adversarial
 from test_loss import dataset, physics  # noqa: F401
 
 ADVERSARIAL_COMBOS = ["DeblurGAN", "CSGM", "AmbientGAN", "UAIR"]
+DISCRIMS = [
+    "PatchGANDiscriminator",
+    "ESRGANDiscriminator",
+    "DCGANDiscriminator",
+    "SkipConvDiscriminator",
+]
 
 
 @pytest.fixture
@@ -134,3 +140,29 @@ def test_adversarial_nets(test_shape):
     batch = torch.randn([1] + list(test_shape))
     out = discriminator(batch)
     assert out.shape == tuple([1, 1] + [11 for i in range(dim)])
+
+
+def choose_discriminator(discrim_name, imsize):
+    if discrim_name == "PatchGANDiscriminator":
+        return dinv.models.gan.PatchGANDiscriminator(
+            input_nc=1, ndf=2, n_layers=5, batch_norm=False
+        )
+    elif discrim_name == "ESRGANDiscriminator":
+        return dinv.models.gan.ESRGANDiscriminator(
+            imsize, hidden_dims=[64] * 6, bn=False
+        )
+    elif discrim_name == "DCGANDiscriminator":
+        return dinv.models.gan.DCGANDiscriminator(ndf=2, nc=1)
+    elif discrim_name == "SkipConvDiscriminator":
+        return dinv.models.gan.SkipConvDiscriminator(
+            imsize[1:], d_dim=2, d_blocks=1, in_channels=1
+        )
+
+
+@pytest.mark.parametrize("discrim_name", DISCRIMS)
+def test_discriminators(discrim_name, imsize):
+    # 1 channel for speed
+    D = choose_discriminator(discrim_name, (1, *imsize[1:]))
+    x = torch.rand(1, *imsize[1:]).unsqueeze(0)
+    y = D(x)
+    assert len(y.flatten()) == 1
