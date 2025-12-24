@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import torch
 import torch.nn as nn
@@ -54,9 +54,7 @@ class SupAdversarialLoss(AdversarialLoss):
         >>> l.backward()
     """
 
-    def forward(
-        self, x: Tensor, x_net: Tensor, model: nn.Module = None, *args, **kwargs
-    ):
+    def forward(self, x: Tensor, x_net: Tensor, model: nn.Module, *args, **kwargs):
         r"""Forward pass for supervised adversarial generator loss.
 
         :param torch.Tensor x: ground truth image
@@ -119,7 +117,7 @@ class GPLoss(SupAdversarialLoss):
         model: nn.Module = None,
         *args,
         **kwargs,
-    ):
+    ) -> torch.Tensor:
         with self.step_discrim(model) as step:
             for _ in range(self.num_D_steps):
                 l = self.adversarial_discrim(x, x_net)
@@ -186,7 +184,7 @@ class UnsupAdversarialLoss(AdversarialLoss):
         metric_gan: DiscriminatorMetric = None,
         optimizer_D: torch.optim.Optimizer = None,
         scheduler_D: torch.optim.lr_scheduler.LRScheduler = None,
-        device="cpu",
+        device: torch.device | str = "cpu",
         **kwargs,
     ):
         super().__init__(
@@ -209,7 +207,7 @@ class UnsupAdversarialLoss(AdversarialLoss):
         model: nn.Module = None,
         *args,
         **kwargs,
-    ):
+    ) -> torch.Tensor:
         r"""Forward pass for unsupervised adversarial generator loss.
 
         :param torch.Tensor y: input measurement
@@ -318,7 +316,7 @@ class MultiOperatorUnsupAdversarialLoss(UnsupAdversarialLoss, MultiOperatorMixin
         scheduler_D: torch.optim.lr_scheduler.LRScheduler = None,
         physics_generator: PhysicsGenerator = None,
         dataloader: DataLoader = None,
-        device="cpu",
+        device: torch.device | str = "cpu",
         **kwargs,
     ):
         super().__init__(
@@ -352,10 +350,10 @@ class MultiOperatorUnsupAdversarialLoss(UnsupAdversarialLoss, MultiOperatorMixin
         x_net: Tensor,
         physics: Physics,
         model: nn.Module,
-        epoch=None,
+        epoch: Optional[int] = None,
         *args,
         **kwargs,
-    ):
+    ) -> torch.Tensor:
         self.reset_iter(epoch=epoch)
 
         # Step data and physics
