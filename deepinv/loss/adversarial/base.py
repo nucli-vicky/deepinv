@@ -134,7 +134,7 @@ class AdversarialLoss(Loss):
         adv_loss_real = self.metric_gan(pred_real, real=True)
         adv_loss_fake = self.metric_gan(pred_fake, real=False)
 
-        return (adv_loss_real + adv_loss_fake) * self.weight_adv
+        return adv_loss_real + adv_loss_fake
 
     @contextmanager
     def step_discrim(self, model: nn.Module = None):
