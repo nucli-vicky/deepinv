@@ -1124,10 +1124,13 @@ class Trainer:
         """
         post_str = "Training" if train else "Eval"
 
+        log_images_mlops = (self.mlflow_vis or self.wandb_vis) and (
+            (epoch + 1) % self.plot_interval == 0
+        )
         plot_images = self.plot_images and ((epoch + 1) % self.plot_interval == 0)
         save_images = self.save_folder_im is not None
 
-        if plot_images or save_images:
+        if plot_images or save_images or log_images_mlops:
             if self.compare_no_learning:
                 x_nl = self.no_learning_inference(y, physics)
             else:
@@ -1146,24 +1149,24 @@ class Trainer:
                 rescale_mode=self.rescale_mode,
             )
 
-            if self.wandb_vis:
-                import wandb
+        if self.wandb_vis and log_images_mlops:
+            import wandb
 
-                log_dict_post_epoch = {}
-                images = wandb.Image(
-                    grid_image,
-                    caption=caption,
-                )
-                log_dict_post_epoch[post_str + " samples"] = images
-                log_dict_post_epoch["step"] = epoch
-                wandb.log(log_dict_post_epoch, step=epoch)
+            log_dict_post_epoch = {}
+            images = wandb.Image(
+                grid_image,
+                caption=caption,
+            )
+            log_dict_post_epoch[post_str + " samples"] = images
+            log_dict_post_epoch["step"] = epoch
+            wandb.log(log_dict_post_epoch, step=epoch)
 
-            if self.mlflow_vis:
-                import mlflow
+        if self.mlflow_vis and log_images_mlops:
+            import mlflow
 
-                image = TF.to_pil_image(grid_image, mode="RGB")
-                mlflow.log_metrics({"step": epoch}, step=epoch)
-                mlflow.log_image(image, key=f"{post_str} samples", step=epoch)
+            image = TF.to_pil_image(grid_image, mode="RGB")
+            mlflow.log_metrics({"step": epoch}, step=epoch)
+            mlflow.log_image(image, key=f"{post_str} samples", step=epoch)
 
         if save_images:
             for k, img in enumerate(imgs):  # ground truths, reconstructions, etc.
