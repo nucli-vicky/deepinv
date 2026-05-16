@@ -779,7 +779,7 @@ class Trainer:
 
         return x, y, physics
 
-    def get_samples(self, iterators, g):
+    def get_samples(self, iterators: list, g: int):
         r"""
         Get the samples.
 
