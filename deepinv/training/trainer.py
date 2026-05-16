@@ -671,7 +671,7 @@ class Trainer:
 
         return grad_norm
 
-    def get_samples_online(self, iterators, g):
+    def get_samples_online(self, data):
         r"""
         Get the samples for the online measurements.
 
@@ -683,8 +683,6 @@ class Trainer:
         :param int g: Current dataloader index.
         :returns: a tuple containing at least: the ground truth, the measurement, and the current physics operator.
         """
-        data = next(iterators[g])
-
         params = {}
         if isinstance(data, (tuple, list)):
             x = data[0]
@@ -717,7 +715,7 @@ class Trainer:
 
         return x, y, physics
 
-    def get_samples_offline(self, iterators, g):
+    def get_samples_offline(self, data):
         r"""
         Get the samples for the offline measurements.
 
@@ -734,7 +732,6 @@ class Trainer:
         :param int g: Current dataloader index.
         :returns: a dictionary containing at least: the ground truth, the measurement, and the current physics operator.
         """
-        data = next(iterators[g])
         if not isinstance(data, (tuple, list)) or len(data) < 2:
             raise ValueError(
                 "If online_measurements=False, the dataloader should output a tuple (x, y) or (x, y, params)"
@@ -793,10 +790,11 @@ class Trainer:
         :param int g: Current dataloader index.
         :returns: the tuple returned by the get_samples_online or get_samples_offline function.
         """
+        data = next(iterators[g])
         if self.online_measurements:  # the measurements y are created on-the-fly
-            x, y, physics = self.get_samples_online(iterators, g)
+            x, y, physics = self.get_samples_online(data)
         else:  # the measurements y were pre-computed
-            x, y, physics = self.get_samples_offline(iterators, g)
+            x, y, physics = self.get_samples_offline(data)
 
         if x is not None:  # If x is None, we are in unsupervised case
             if torch.isinf(x).any() or torch.isnan(x).any():
@@ -1014,12 +1012,12 @@ class Trainer:
 
     def step(
         self,
-        epoch,
+        epoch: int,
         progress_bar,
-        train_ite=None,
-        train=True,
-        last_batch=False,
-        update_progress_bar=False,
+        train_ite: int | None = None,
+        train: bool = True,
+        last_batch: bool = False,
+        update_progress_bar: bool = False,
     ):
         r"""
         Train/Eval a batch.
