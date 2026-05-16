@@ -14,6 +14,7 @@ New Features
 - Add the equivariant splitting loss :class:`deepinv.loss.EquivariantSplittingLoss` with equivariant reconstructors :class:`deepinv.models.EquivariantReconstructor` and virtual physics :class:`deepinv.physics.VirtualLinearPhysics` (:gh:`881` by `Jérémy Scanvic`_)
 - Add `DEEPINV_CACHE_DIR` environment variable to set the cache directory for datasets and pretrained weights (:gh:`1105` by `Minh Hai Nguyen`_)
 - NIQE weight fitting on custom datasets, using :class:`deepinv.loss.metric.NIQE.create_weights` (:gh:`911` by `Vicky De Ridder`_)
+- Add :class:`deepinv.models.FFDNet` for non-blind Gaussian denoising (:gh:`1174` by `Vicky De Ridder`_)
 - Extend :func:`deepinv.physics.functional.gaussian_blur` to 1D and 3D. Add :class:`deepinv.physics.generator.GaussianBlurGenerator` (:gh:`1152` by `Romain Vo`_)
 
 Changed
