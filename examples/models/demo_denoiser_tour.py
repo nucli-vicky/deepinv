@@ -57,7 +57,7 @@ noisy_image = image + sigma * torch.randn_like(image)
 # DeepInverse provides a set of classical denoisers such as :class:`deepinv.models.BM3D`,
 # :class:`deepinv.models.TGVDenoiser`, or :class:`deepinv.models.WaveletDictDenoiser`.
 #
-# They can be easily used simply by instanciating their corresponding class,
+# They can be easily used simply by instantiating their corresponding class,
 # and calling them with the noisy image and the noise level.
 #
 bm3d = dinv.models.BM3D()
