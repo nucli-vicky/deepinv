@@ -56,8 +56,8 @@ def hadamard_shift(x: torch.Tensor, dim: int) -> torch.Tensor:
     :rtype: torch.Tensor
     """
     n = x.shape[dim]
-    indexs = sequency_order(n)
-    x = x.index_select(dim, torch.tensor(indexs, device=x.device))
+    indices = sequency_order(n)
+    x = x.index_select(dim, torch.tensor(indices, device=x.device))
     return x
 
 
@@ -74,9 +74,9 @@ def hadamard_ishift(x: torch.Tensor, dim: int) -> torch.Tensor:
     :rtype: torch.Tensor
     """
     n = x.shape[dim]
-    indexs = sequency_order(n)
-    indexs = np.argsort(indexs)
-    x = x.index_select(dim, torch.tensor(indexs, device=x.device))
+    indices = sequency_order(n)
+    indices = np.argsort(indices)
+    x = x.index_select(dim, torch.tensor(indices, device=x.device))
     return x
 
 
