@@ -187,6 +187,12 @@ All these datasets inherit from :class:`deepinv.datasets.ImageDataset`.
      - RGB, 768×512 or 512×768 pixels.
      - A widely-used benchmark dataset for denoising, compression and demosaicing.
 
+   * - :class:`PIRMHR <deepinv.datasets.PIRMHR>`
+     - `x`
+     - 100 (val) or 100 (test) images
+     - RGB, variable sizes (~300K pixels).
+     - A benchmark dataset for perceptual image super-resolution, from the 2018 PIRM challenge.
+
    * - :class:`CBSD68 <deepinv.datasets.CBSD68>`
      - `x`
      - 68 images
