@@ -24,6 +24,7 @@ from .fmd import FMD
 from .kohler import Kohler
 from .utils import download_archive
 from .satellite import NBUDataset
+from .pancollection import PanCollectionDataset
 from .base import (
     ImageDataset,
     check_dataset,
