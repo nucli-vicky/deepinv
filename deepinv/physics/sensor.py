@@ -117,7 +117,7 @@ class Quantization(SensorModel):
 
     :param int, None levels: number of ADC levels :math:`L` spanning the dynamic range. The number of quantization levels is ``levels - black_level`` and must be >= 2. Mutually exclusive with ``bits``. If neither ``levels`` nor ``bits`` is passed, defaults to ``256`` (8-bit).
     :param int, None bits: bit depth of the sensor, sets ``levels = 2**bits`` (``bits=8`` is equivalent to ``levels=256``). Mutually exclusive with ``levels``.
-    :param float black_level: black level :math:`b \geq 0` in raw ADC units, i.e. the sensor output at zero intensity (black level error), e.g. ``black_level_per_channel`` in the metadata of :func:`deepinv.utils.load_raw`. Reduces the usable dynamic range from :math:`L` to :math:`L - b` levels, i.e. :math:`2^{bits} - b` when ``bits`` is used.
+    :param float, list, tuple, torch.Tensor black_level: black level :math:`b \geq 0` in raw ADC units, i.e. the sensor output at zero intensity (black level error), e.g. ``black_level_per_channel`` in the metadata of :func:`deepinv.utils.load_raw`. A list, tuple or tensor sets one black level per channel. Reduces the usable dynamic range from :math:`L` to :math:`L - b` levels, i.e. :math:`2^{bits} - b` when ``bits`` is used.
     :param tuple dynamic_range: dynamic range :math:`(z_{\min}, z_{\max})`. Default: ``(0.0, 1.0)``.
     :param bool clip: if ``True``, clip the input to the dynamic range before quantizing. Default: ``True``.
     """
@@ -128,7 +128,7 @@ class Quantization(SensorModel):
         bits: int | None = None,
         dynamic_range: tuple = (0.0, 1.0),
         clip: bool = True,
-        black_level: float = 0,
+        black_level: float | list | tuple | torch.Tensor = 0,
     ):
         super().__init__()
         if levels is not None and bits is not None:
@@ -156,13 +156,34 @@ class Quantization(SensorModel):
         levels = int(levels)
         if levels < 2:
             raise ValueError(f"levels must be an int >= 2, got {levels}.")
-        if isinstance(black_level, bool) or not isinstance(black_level, numbers.Real):
-            raise TypeError(
-                f"black_level must be an int or float, but got type '{type(black_level).__name__}'."
-            )
-        if black_level < 0:
+        if isinstance(black_level, (list, tuple)):
+            if any(
+                isinstance(b, bool) or not isinstance(b, numbers.Real)
+                for b in black_level
+            ):
+                raise TypeError(
+                    f"black_level must contain only real numbers, but got {black_level!r}."
+                )
+            black_level = torch.as_tensor(black_level)
+        if torch.is_tensor(black_level):
+            if black_level.dtype == torch.bool or black_level.is_complex():
+                raise TypeError(
+                    f"black_level tensor must have a real numeric dtype, but got '{black_level.dtype}'."
+                )
+            negative = bool((black_level < 0).any())
+            too_few = bool((levels - black_level < 2).any())
+        else:
+            if isinstance(black_level, bool) or not isinstance(
+                black_level, numbers.Real
+            ):
+                raise TypeError(
+                    f"black_level must be an int, float, list, tuple or torch.Tensor, but got type '{type(black_level).__name__}'."
+                )
+            negative = black_level < 0
+            too_few = levels - black_level < 2
+        if negative:
             raise ValueError(f"black_level must be >= 0, got {black_level}.")
-        if levels - black_level < 2:
+        if too_few:
             raise ValueError(
                 f"levels - black_level must be >= 2, got {levels} - {black_level}."
             )
@@ -179,4 +200,11 @@ class Quantization(SensorModel):
         :return: (:class:`torch.Tensor`) quantized tensor.
         """
         z_min, z_max = self.dynamic_range
-        return _ClippedQuantization.apply(x, self.levels, z_min, z_max, self.clip)
+        levels = self.levels
+        if torch.is_tensor(levels):
+            levels = levels.to(x.device)
+            if (
+                levels.ndim == 1
+            ):  # one black level per channel: broadcast over the channel dim
+                levels = levels.reshape(-1, 1, 1)
+        return _ClippedQuantization.apply(x, levels, z_min, z_max, self.clip)

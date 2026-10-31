@@ -2468,6 +2468,16 @@ def test_tone_mapping_after_blur(device):
     assert x.grad is not None and torch.all(~torch.isnan(x.grad))
 
 
+def test_sensor_model(device):
+    r"""
+    Tests the base sensor model: a custom non-linearity, and identity by default.
+    """
+    x = torch.rand(1, 3, 8, 8, device=device)
+    sensor = dinv.physics.SensorModel(sensor_model=lambda z: 2 * z)
+    torch.testing.assert_close(sensor(x), 2 * x)
+    torch.testing.assert_close(dinv.physics.SensorModel()(x), x)  # default: identity
+
+
 def test_saturation(device):
     r"""
     Tests the saturation sensor model: clipping and a.e. differentiability with
@@ -2550,6 +2560,29 @@ def test_quantization(device):
     with pytest.raises(ValueError):
         dinv.physics.Quantization(bits=4, black_level=15)  # 16 - 15 = 1 < 2 levels
 
+    # per-channel black levels, broadcast over the channel dim
+    sensor = dinv.physics.Quantization(bits=12, black_level=[64, 63, 65])
+    torch.testing.assert_close(sensor.levels, torch.tensor([4032, 4033, 4031]))
+    y = sensor(torch.rand(1, 3, 8, 8, device=device))
+    for c, b in enumerate([64, 63, 65]):  # per-channel grid of 2**12 - b levels
+        torch.testing.assert_close(
+            y[:, c] * (4096 - b - 1), torch.round(y[:, c] * (4096 - b - 1))
+        )
+    sensor = dinv.physics.Quantization(
+        bits=12, black_level=torch.tensor([64.0, 63.0, 65.0], device=device)
+    )
+    assert sensor.levels.shape == (3,)
+    with pytest.raises(TypeError):
+        dinv.physics.Quantization(bits=8, black_level=[64, "a"])
+    with pytest.raises(TypeError):
+        dinv.physics.Quantization(bits=8, black_level=torch.tensor([True, False]))
+    with pytest.raises(TypeError):
+        dinv.physics.Quantization(bits=8, black_level=torch.tensor([1 + 2j]))
+    with pytest.raises(ValueError):
+        dinv.physics.Quantization(bits=8, black_level=[64, -1])
+    with pytest.raises(ValueError):
+        dinv.physics.Quantization(bits=4, black_level=[15, 0])  # 16 - 15 = 1 < 2 levels
+
 
 def test_tone_mapping_ldr_pipeline(device):
     r"""
@@ -2564,7 +2597,9 @@ def test_tone_mapping_ldr_pipeline(device):
     y = physics(x)
     torch.testing.assert_close(y * 255.0, torch.round(y * 255.0))
     assert torch.all(y >= 0.0) and torch.all(y <= 1.0)
-    assert torch.all(x[y >= 1.0 - 1e-6] >= 1.0)  # saturated pixels come from HDR values
+    # pixels quantized to the top bin come from HDR values above the inverse sRGB of that bin
+    top_bin = dinv.physics.functional.srgb_eotf(torch.tensor(254.5 / 255.0)).item()
+    assert torch.all(x[y >= 1.0 - 1e-6] >= top_bin)
 
     # sensor-aware data fidelity: gradients flow through the full physics
     x_hat = torch.rand_like(x, requires_grad=True)
