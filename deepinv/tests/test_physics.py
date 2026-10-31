@@ -2505,9 +2505,13 @@ def test_quantization(device):
 
     with pytest.raises(ValueError):
         dinv.physics.Quantization(levels=1)
-    with pytest.raises(ValueError):
+    with pytest.raises(TypeError):
         dinv.physics.Quantization(levels=2.5)
+    with pytest.raises(TypeError):
+        dinv.physics.Quantization(levels=True)
+    # numpy integers are converted to int
     assert dinv.physics.Quantization(levels=np.int64(16)).levels == 16
+    assert dinv.physics.Quantization(bits=np.int64(8)).levels == 256
 
     # custom dynamic range: grid of `levels` values spanning [-1, 3]
     sensor = dinv.physics.Quantization(levels=5, dynamic_range=(-1.0, 3.0))
@@ -2515,6 +2519,36 @@ def test_quantization(device):
     torch.testing.assert_close(
         sensor(x), torch.tensor([-1.0, -1.0, 0.0, 3.0, 3.0], device=device)
     )
+
+    # bit depth instead of levels: bits=8 is equivalent to levels=256
+    sensor_bits = dinv.physics.Quantization(bits=8)
+    assert sensor_bits.levels == 256
+    x = torch.rand(1, 3, 8, 8, device=device)
+    torch.testing.assert_close(sensor_bits(x), dinv.physics.Quantization(levels=256)(x))
+    assert dinv.physics.Quantization(bits=12).levels == 4096
+    assert dinv.physics.Quantization().levels == 256  # default is 8-bit
+
+    # black level: usable dynamic range is 2**bits - black_level levels
+    sensor = dinv.physics.Quantization(bits=12, black_level=64)
+    assert sensor.levels == 4096 - 64
+    y = sensor(torch.rand(1, 3, 8, 8, device=device) * 2.0 - 0.5)
+    torch.testing.assert_close(y * (4096 - 64 - 1), torch.round(y * (4096 - 64 - 1)))
+    assert torch.all(y >= 0.0) and torch.all(y <= 1.0)
+
+    with pytest.raises(ValueError):
+        dinv.physics.Quantization(levels=256, bits=8)  # mutually exclusive
+    with pytest.raises(ValueError):
+        dinv.physics.Quantization(bits=0)
+    with pytest.raises(TypeError):
+        dinv.physics.Quantization(bits=2.5)
+    with pytest.raises(TypeError):
+        dinv.physics.Quantization(bits=True)
+    with pytest.raises(ValueError):
+        dinv.physics.Quantization(bits=8, black_level=-1.0)
+    with pytest.raises(TypeError):
+        dinv.physics.Quantization(bits=8, black_level="64")
+    with pytest.raises(ValueError):
+        dinv.physics.Quantization(bits=4, black_level=15)  # 16 - 15 = 1 < 2 levels
 
 
 def test_tone_mapping_ldr_pipeline(device):

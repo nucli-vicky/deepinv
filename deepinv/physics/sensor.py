@@ -113,54 +113,93 @@ class Quantization(SensorModel):
     r"""
     Quantization sensor model with straight-through gradient estimator.
 
-    Quantizes the measurements to a uniform grid of :math:`L` values spanning
-    the dynamic range :math:`[z_{\min}, z_{\max}]`
+    Quantizes the measurements to a uniform grid spanning the dynamic range :math:`[z_{\min}, z_{\max}]`:
 
     .. math::
 
         \eta(z) = z_{\min} + \Delta \, \mathrm{round}\left(\frac{\mathrm{clip}(z) - z_{\min}}{\Delta}\right),
-        \quad \Delta = \frac{z_{\max} - z_{\min}}{L - 1},
+        \quad \Delta = \frac{z_{\max} - z_{\min}}{L - b - 1},
 
-    where :math:`L` is the number of quantization levels (e.g. :math:`L=256`
-    for 8-bit images) and :math:`\mathrm{clip}` clips to the dynamic range. If
-    ``clip=False``, values outside the dynamic range are quantized on the same
-    grid without clipping.
+    where :math:`L` is the number of ADC levels of the sensor and :math:`b` its black level, so the usable dynamic range spans :math:`L - b` levels. Set :math:`L` directly with ``levels`` or from the bit depth with ``bits`` (:math:`L = 2^{bits}`), e.g. ``bits=10``, ``12``, ``14`` or ``16`` for typical cameras. If ``clip=False``, values outside the dynamic range are quantized on the same grid without clipping.
 
-    Quantization is not differentiable (the gradient of rounding is zero
-    almost everywhere). This operator therefore implements the straight-through
-    estimator :footcite:p:`bengio2013estimating`: in the backward pass, the
-    gradient is passed through unchanged for in-range values (and set to zero
-    for clipped values, mirroring :class:`deepinv.physics.Saturation`).
+    .. note::
+
+        Rounding has zero gradient almost everywhere. This class implements the straight-through estimator :footcite:p:`bengio2013estimating`: the gradient is passed through unchanged for in-range values and set to zero for clipped values, mirroring :class:`deepinv.physics.Saturation`.
 
     .. warning::
 
-        If the quantizer is included in the forward operator of a
-        reconstruction, the data-fidelity term is piecewise-constant: it is
-        flat on the measurement-consistent set, so gradient-based
-        reconstruction cannot explore it. For finely quantized measurements
-        (e.g. 8-bit), it is usually better to leave the quantizer out of the
-        forward operator and treat the quantization error as noise.
+        If the quantizer is part of the forward operator of a reconstruction, the data-fidelity term is piecewise-constant, so gradient-based reconstruction cannot explore it. For finely quantized measurements (e.g. 8-bit), leave the quantizer out of the forward operator and model the quantization error as noise.
 
-    :param int levels: number of quantization levels :math:`L \geq 2`.
-        Default: ``256``.
-    :param tuple dynamic_range: dynamic range :math:`(z_{\min}, z_{\max})`.
-        Default: ``(0.0, 1.0)``.
-    :param bool clip: if ``True`` (default), clip the input to the dynamic
-        range before quantizing.
+    :param int, None levels: number of ADC levels :math:`L` spanning the dynamic range. The number of quantization levels is ``levels - black_level`` and must be >= 2. Mutually exclusive with ``bits``. If neither ``levels`` nor ``bits`` is passed, defaults to ``256`` (8-bit).
+    :param int, None bits: bit depth of the sensor, sets ``levels = 2**bits`` (``bits=8`` is equivalent to ``levels=256``). Mutually exclusive with ``levels``.
+    :param float black_level: black level :math:`b \geq 0` in raw ADC units, i.e. the sensor output at zero intensity (black level error), e.g. ``black_level_per_channel`` in the metadata of :func:`deepinv.utils.load_raw`. Reduces the usable dynamic range from :math:`L` to :math:`L - b` levels, i.e. :math:`2^{bits} - b` when ``bits`` is used.
+    :param tuple dynamic_range: dynamic range :math:`(z_{\min}, z_{\max})`. Default: ``(0.0, 1.0)``.
+    :param bool clip: if ``True``, clip the input to the dynamic range before quantizing. Default: ``True``.
+
+    |sep|
+
+    :Examples:
+
+        8-bit quantization, equivalent to ``levels=256``:
+
+        >>> import torch
+        >>> from deepinv.physics import Quantization
+        >>> sensor = Quantization(bits=8)
+        >>> sensor(torch.tensor([0.0, 0.5, 1.0]))
+        tensor([0.0000, 0.5020, 1.0000])
+
+        12-bit sensor with a black level of 64 ADC counts, i.e. :math:`2^{12} - 64 = 4032` usable levels:
+
+        >>> Quantization(bits=12, black_level=64).levels
+        4032
     """
 
     def __init__(
         self,
-        levels: int = 256,
+        levels: int | None = None,
+        bits: int | None = None,
         dynamic_range: tuple = (0.0, 1.0),
         clip: bool = True,
+        black_level: float = 0,
     ):
         super().__init__()
+        if levels is not None and bits is not None:
+            raise ValueError(
+                f"levels and bits are mutually exclusive, got levels={levels} and bits={bits}."
+            )
+        if bits is not None:
+            if isinstance(bits, bool) or not isinstance(bits, numbers.Integral):
+                raise TypeError(
+                    f"bits must be an int, but got type '{type(bits).__name__}'."
+                )
+            bits = int(bits)
+            if bits < 1:
+                raise ValueError(f"bits must be an int >= 1, got {bits}.")
+            levels = 2**bits
+            self.bits = bits
+        else:
+            self.bits = None
+        if levels is None:
+            levels = 256
         if isinstance(levels, bool) or not isinstance(levels, numbers.Integral):
-            raise ValueError(f"levels must be an integer >= 2, got {levels}.")
+            raise TypeError(
+                f"levels must be an int, but got type '{type(levels).__name__}'."
+            )
+        levels = int(levels)
         if levels < 2:
-            raise ValueError(f"levels must be an integer >= 2, got {levels}.")
-        self.levels = int(levels)
+            raise ValueError(f"levels must be an int >= 2, got {levels}.")
+        if isinstance(black_level, bool) or not isinstance(black_level, numbers.Real):
+            raise TypeError(
+                f"black_level must be an int or float, but got type '{type(black_level).__name__}'."
+            )
+        if black_level < 0:
+            raise ValueError(f"black_level must be >= 0, got {black_level}.")
+        if levels - black_level < 2:
+            raise ValueError(
+                f"levels - black_level must be >= 2, got {levels} - {black_level}."
+            )
+        self.levels = levels - black_level
+        self.black_level = black_level
         self.dynamic_range = dynamic_range
         self.clip = clip
 
