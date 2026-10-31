@@ -242,6 +242,8 @@ def test_mu_law_psnr(device):
     x_scaled = x * torch.tensor([1.0, 2.0], device=device).view(2, 1, 1, 1)
     m = metric.MuLawPSNR(max_pixel=None)
     assert torch.allclose(m(x_scaled, x_scaled), m(x, x))
+    # all-zero ground truth does not divide by zero
+    assert torch.all(torch.isfinite(m(x, torch.zeros_like(x))))
 
     # the same absolute error costs more in dark regions than in bright ones
     dark, bright = torch.full_like(x, 0.1), torch.full_like(x, 9.0)

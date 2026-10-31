@@ -370,7 +370,9 @@ class MuLawPSNR(Metric):
     :param float mu: compression parameter :math:`\mu > 0`. Default: ``5000``.
     :param float max_pixel: normalization value :math:`\text{MAX}_I` of the
         HDR images, mapped to 1 by the compression. If ``None``, uses the max
-        pixel value of each ground truth image ``x``. Default: ``1``.
+        pixel value of each ground truth image ``x``, clamped from below by the
+        machine epsilon of its dtype to avoid a division by zero for all-zero
+        images. Default: ``1``.
     :param bool complex_abs: perform complex magnitude before passing data to metric function. If ``True``,
         the data must either be of complex dtype or have size 2 in the channel dimension (usually the second dimension after batch).
     :param str reduction: a method to reduce metric score over individual batch scores. ``mean``: takes the mean, ``sum`` takes the sum, ``none`` or None no reduction will be applied (default).
@@ -389,7 +391,9 @@ class MuLawPSNR(Metric):
         max_pixel = (
             self.max_pixel
             if self.max_pixel is not None
-            else x.amax(dim=tuple(range(1, x.ndim)), keepdim=True)
+            else x.amax(dim=tuple(range(1, x.ndim)), keepdim=True).clamp(
+                min=torch.finfo(x.dtype).eps
+            )
         )
         return cal_psnr(
             log_tone(self.mu * x_net / max_pixel, L=self.mu),
