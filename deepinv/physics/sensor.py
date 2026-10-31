@@ -51,30 +51,15 @@ class SensorModel(nn.Module):
 
 class Saturation(SensorModel):
     r"""
-    Saturation sensor model.
-
-    Clips the measurements to a given dynamic range
+    Saturation sensor model: clips the measurements to a dynamic range.
 
     .. math::
 
         \eta(z) = \min\left(z_{\max}, \max\left(z_{\min}, z\right)\right).
 
-    All values outside the dynamic range are mapped to its boundary, which
-    makes the operator many-to-one: saturated measurements carry no
-    information about the input signal beyond the range boundary. This is the
-    standard model of display or storage clipping, e.g. of overexposed
-    highlights in low dynamic range images.
+    Values outside the range map to its boundary, making the operator many-to-one: saturated measurements carry no information beyond the boundary (e.g. overexposed highlights in LDR images). Differentiable almost everywhere, with zero gradient outside the range, so saturated measurements contribute no gradient to the data-fidelity term; if the forward operator mixes pixels (e.g. a blur), the signal is still constrained by neighbouring unsaturated measurements.
 
-    The operator is differentiable almost everywhere, with zero gradient
-    outside the dynamic range. When it is included in the forward operator of
-    a reconstruction (see :class:`deepinv.physics.SensorModel`), saturated
-    measurements contribute no gradient to the data-fidelity term. This does not mean that the corresponding pixels
-    are reconstructed from the prior alone: if the forward operator mixes
-    neighbouring pixels (e.g. a blur), the underlying signal is still
-    constrained by the neighbouring unsaturated measurements.
-
-    :param tuple dynamic_range: dynamic range :math:`(z_{\min}, z_{\max})`.
-        Default: ``(0.0, 1.0)``.
+    :param tuple dynamic_range: dynamic range :math:`(z_{\min}, z_{\max})`. Default: ``(0.0, 1.0)``.
     """
 
     def __init__(self, dynamic_range: tuple = (0.0, 1.0)):
@@ -135,23 +120,6 @@ class Quantization(SensorModel):
     :param float black_level: black level :math:`b \geq 0` in raw ADC units, i.e. the sensor output at zero intensity (black level error), e.g. ``black_level_per_channel`` in the metadata of :func:`deepinv.utils.load_raw`. Reduces the usable dynamic range from :math:`L` to :math:`L - b` levels, i.e. :math:`2^{bits} - b` when ``bits`` is used.
     :param tuple dynamic_range: dynamic range :math:`(z_{\min}, z_{\max})`. Default: ``(0.0, 1.0)``.
     :param bool clip: if ``True``, clip the input to the dynamic range before quantizing. Default: ``True``.
-
-    |sep|
-
-    :Examples:
-
-        8-bit quantization, equivalent to ``levels=256``:
-
-        >>> import torch
-        >>> from deepinv.physics import Quantization
-        >>> sensor = Quantization(bits=8)
-        >>> sensor(torch.tensor([0.0, 0.5, 1.0]))
-        tensor([0.0000, 0.5020, 1.0000])
-
-        12-bit sensor with a black level of 64 ADC counts, i.e. :math:`2^{12} - 64 = 4032` usable levels:
-
-        >>> Quantization(bits=12, black_level=64).levels
-        4032
     """
 
     def __init__(
@@ -205,6 +173,8 @@ class Quantization(SensorModel):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         r"""
+        Quantizes the input to the uniform grid.
+
         :param torch.Tensor x: input tensor.
         :return: (:class:`torch.Tensor`) quantized tensor.
         """
