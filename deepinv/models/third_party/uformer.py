@@ -236,8 +236,6 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-    def extra_repr(self) -> str:
-        return f"dim={self.dim}, win_size={self.win_size}, num_heads={self.num_heads}"
 
 
 class Attention(nn.Module):
@@ -279,8 +277,6 @@ class Attention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-    def extra_repr(self) -> str:
-        return f"dim={self.dim}, num_heads={self.num_heads}"
 
 
 class Mlp(nn.Module):
@@ -541,11 +537,6 @@ class LeWinTransformerBlock(nn.Module):
     def with_pos_embed(self, tensor, pos):
         return tensor if pos is None else tensor + pos
 
-    def extra_repr(self) -> str:
-        return (
-            f"dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, "
-            f"win_size={self.win_size}, shift_size={self.shift_size}, mlp_ratio={self.mlp_ratio},modulator={self.modulator}"
-        )
 
     def forward(self, x, mask=None):
         B, L, C = x.shape
@@ -720,8 +711,6 @@ class BasicUformerLayer(nn.Module):
             ]
         )
 
-    def extra_repr(self) -> str:
-        return f"dim={self.dim}, input_resolution={self.input_resolution}, depth={self.depth}"
 
     def forward(self, x, mask=None):
         for blk in self.blocks:
@@ -898,8 +887,6 @@ class Uformer(nn.Module):
     def no_weight_decay_keywords(self):
         return {"relative_position_bias_table"}
 
-    def extra_repr(self) -> str:
-        return f"embed_dim={self.embed_dim}, token_projection={self.token_projection}, token_mlp={self.mlp},win_size={self.win_size}"
 
     def forward(self, x, mask=None):
         # Input Projection
