@@ -1,5 +1,6 @@
 # This file is adapted from https://github.com/sanghyun-son/EDSR-PyTorch
 # Copyright (c) 2018 Sanghyun Son
+# See THIRD_PARTY_LICENSES for the full text.
 
 from model import common
 

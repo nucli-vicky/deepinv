@@ -1,5 +1,6 @@
 # This file is adapted from https://github.com/sanghyun-son/EDSR-PyTorch
 # Copyright (c) 2018 Sanghyun Son
+# See THIRD_PARTY_LICENSES for the full text.
 
 ## ECCV-2018-Image Super-Resolution Using Very Deep Residual Channel Attention Networks
 ## https://arxiv.org/abs/1807.02758
