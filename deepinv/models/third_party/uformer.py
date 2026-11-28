@@ -7,16 +7,16 @@ import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import rearrange
 import math
 
 
 class FastLeFF(nn.Module):
 
-    def __init__(self, dim=32, hidden_dim=128, act_layer=nn.GELU, drop=0.0):
+    def __init__(self, dim=32, hidden_dim=128, act_layer=nn.GELU):
         super().__init__()
 
-        from torch_dwconv import depthwise_conv2d, DepthwiseConv2d
+        from torch_dwconv import DepthwiseConv2d
 
         self.linear1 = nn.Sequential(nn.Linear(dim, hidden_dim), act_layer())
         self.dwconv = nn.Sequential(
@@ -24,8 +24,6 @@ class FastLeFF(nn.Module):
             act_layer(),
         )
         self.linear2 = nn.Sequential(nn.Linear(hidden_dim, dim))
-        self.dim = dim
-        self.hidden_dim = hidden_dim
 
     def forward(self, x):
         # bs x hw x c
@@ -71,10 +69,6 @@ class SepConv2d(torch.nn.Module):
         )
         self.pointwise = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1)
         self.act_layer = act_layer() if act_layer is not None else nn.Identity()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
 
     def forward(self, x):
         x = self.depthwise(x)
@@ -93,8 +87,6 @@ class ConvProjection(nn.Module):
         q_stride=1,
         k_stride=1,
         v_stride=1,
-        dropout=0.0,
-        last_stage=False,
         bias=True,
     ):
 
@@ -115,7 +107,6 @@ class ConvProjection(nn.Module):
         attn_kv = x if attn_kv is None else attn_kv
         x = rearrange(x, "b (l w) c -> b c l w", l=l, w=w)
         attn_kv = rearrange(attn_kv, "b (l w) c -> b c l w", l=l, w=w)
-        # print(attn_kv)
         q = self.to_q(x)
         q = rearrange(q, "b (h d) l w -> b h (l w) d", h=h)
 
@@ -127,14 +118,12 @@ class ConvProjection(nn.Module):
 
 
 class LinearProjection(nn.Module):
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0, bias=True):
+    def __init__(self, dim, heads=8, dim_head=64, bias=True):
         super().__init__()
         inner_dim = dim_head * heads
         self.heads = heads
         self.to_q = nn.Linear(dim, inner_dim, bias=bias)
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias=bias)
-        self.dim = dim
-        self.inner_dim = inner_dim
 
     def forward(self, x, attn_kv=None):
         B_, N, C = x.shape
@@ -208,16 +197,15 @@ class WindowAttention(nn.Module):
         else:
             raise Exception("Projection error!")
 
-        self.token_projection = token_projection
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x, attn_kv=None, mask=None):
+    def forward(self, x, mask=None):
         B_, N, C = x.shape
-        q, k, v = self.qkv(x, attn_kv)
+        q, k, v = self.qkv(x)
         q = q * self.scale
         attn = q @ k.transpose(-2, -1)
 
@@ -229,20 +217,14 @@ class WindowAttention(nn.Module):
         relative_position_bias = relative_position_bias.permute(
             2, 0, 1
         ).contiguous()  # nH, Wh*Ww, Wh*Ww
-        ratio = attn.size(-1) // relative_position_bias.size(-1)
-        relative_position_bias = repeat(
-            relative_position_bias, "nH l c -> nH l (c d)", d=ratio
-        )
-
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
             nW = mask.shape[0]
-            mask = repeat(mask, "nW m n -> nW m (n d)", d=ratio)
             attn = attn.view(
-                B_ // nW, nW, self.num_heads, N, N * ratio
+                B_ // nW, nW, self.num_heads, N, N
             ) + mask.unsqueeze(1).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, N, N * ratio)
+            attn = attn.view(-1, self.num_heads, N, N)
             attn = self.softmax(attn)
         else:
             attn = self.softmax(attn)
@@ -263,7 +245,6 @@ class Attention(nn.Module):
         self,
         dim,
         num_heads,
-        token_projection="linear",
         qkv_bias=True,
         qk_scale=None,
         attn_drop=0.0,
@@ -278,37 +259,18 @@ class Attention(nn.Module):
 
         self.qkv = LinearProjection(dim, num_heads, dim // num_heads, bias=qkv_bias)
 
-        self.token_projection = token_projection
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x, attn_kv=None, mask=None):
+    def forward(self, x, attn_kv=None):
         B_, N, C = x.shape
         q, k, v = self.qkv(x, attn_kv)
         q = q * self.scale
         attn = q @ k.transpose(-2, -1)
-
-        # relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-        #     self.win_size[0] * self.win_size[1], self.win_size[0] * self.win_size[1], -1)  # Wh*Ww,Wh*Ww,nH
-        # relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
-        # ratio = attn.size(-1)//relative_position_bias.size(-1)
-        # relative_position_bias = repeat(relative_position_bias, 'nH l c -> nH l (c d)', d = ratio)
-
-        # attn = attn + relative_position_bias.unsqueeze(0)
-
-        if mask is not None:
-            nW = mask.shape[0]
-            # mask = repeat(mask, 'nW m n -> nW m (n d)',d = ratio)
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(
-                1
-            ).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, N, N)
-            attn = self.softmax(attn)
-        else:
-            attn = self.softmax(attn)
+        attn = self.softmax(attn)
 
         attn = self.attn_drop(attn)
 
@@ -337,9 +299,6 @@ class Mlp(nn.Module):
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
-        self.in_features = in_features
-        self.hidden_features = hidden_features
-        self.out_features = out_features
 
     def forward(self, x):
         x = self.fc1(x)
@@ -351,7 +310,7 @@ class Mlp(nn.Module):
 
 
 class LeFF(nn.Module):
-    def __init__(self, dim=32, hidden_dim=128, act_layer=nn.GELU, drop=0.0):
+    def __init__(self, dim=32, hidden_dim=128, act_layer=nn.GELU):
         super().__init__()
         self.linear1 = nn.Sequential(nn.Linear(dim, hidden_dim), act_layer())
         self.dwconv = nn.Sequential(
@@ -366,8 +325,6 @@ class LeFF(nn.Module):
             act_layer(),
         )
         self.linear2 = nn.Sequential(nn.Linear(hidden_dim, dim))
-        self.dim = dim
-        self.hidden_dim = hidden_dim
 
     def forward(self, x):
         # bs x hw x c
@@ -390,46 +347,20 @@ class LeFF(nn.Module):
         return x
 
 
-def window_partition(x, win_size, dilation_rate=1):
+def window_partition(x, win_size):
     B, H, W, C = x.shape
-    if dilation_rate != 1:
-        x = x.permute(0, 3, 1, 2)  # B, C, H, W
-        assert type(dilation_rate) is int, "dilation_rate should be a int"
-        x = F.unfold(
-            x,
-            kernel_size=win_size,
-            dilation=dilation_rate,
-            padding=4 * (dilation_rate - 1),
-            stride=win_size,
-        )  # B, C*Wh*Ww, H/Wh*W/Ww
-        windows = (
-            x.permute(0, 2, 1).contiguous().view(-1, C, win_size, win_size)
-        )  # B' ,C ,Wh ,Ww
-        windows = windows.permute(0, 2, 3, 1).contiguous()  # B' ,Wh ,Ww ,C
-    else:
-        x = x.view(B, H // win_size, win_size, W // win_size, win_size, C)
-        windows = (
-            x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, win_size, win_size, C)
-        )  # B' ,Wh ,Ww ,C
+    x = x.view(B, H // win_size, win_size, W // win_size, win_size, C)
+    windows = (
+        x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, win_size, win_size, C)
+    )  # B' ,Wh ,Ww ,C
     return windows
 
 
-def window_reverse(windows, win_size, H, W, dilation_rate=1):
+def window_reverse(windows, win_size, H, W):
     # B' ,Wh ,Ww ,C
     B = int(windows.shape[0] / (H * W / win_size / win_size))
     x = windows.view(B, H // win_size, W // win_size, win_size, win_size, -1)
-    if dilation_rate != 1:
-        x = windows.permute(0, 5, 3, 4, 1, 2).contiguous()  # B, C*Wh*Ww, H/Wh*W/Ww
-        x = F.fold(
-            x,
-            (H, W),
-            kernel_size=win_size,
-            dilation=dilation_rate,
-            padding=4 * (dilation_rate - 1),
-            stride=win_size,
-        )
-    else:
-        x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
+    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
     return x
 
 
@@ -441,12 +372,9 @@ class Downsample(nn.Module):
         self.conv = nn.Sequential(
             nn.Conv2d(in_channel, out_channel, kernel_size=4, stride=2, padding=1),
         )
-        self.in_channel = in_channel
-        self.out_channel = out_channel
 
     def forward(self, x):
         B, L, C = x.shape
-        # import pdb;pdb.set_trace()
         H = int(math.sqrt(L))
         W = int(math.sqrt(L))
         x = x.transpose(1, 2).contiguous().view(B, C, H, W)
@@ -460,8 +388,6 @@ class Upsample(nn.Module):
         self.deconv = nn.Sequential(
             nn.ConvTranspose2d(in_channel, out_channel, kernel_size=2, stride=2),
         )
-        self.in_channel = in_channel
-        self.out_channel = out_channel
 
     def forward(self, x):
         B, L, C = x.shape
@@ -479,7 +405,6 @@ class InputProj(nn.Module):
         out_channel=64,
         kernel_size=3,
         stride=1,
-        norm_layer=None,
         act_layer=nn.LeakyReLU,
     ):
         super().__init__()
@@ -493,19 +418,10 @@ class InputProj(nn.Module):
             ),
             act_layer(inplace=True),
         )
-        if norm_layer is not None:
-            self.norm = norm_layer(out_channel)
-        else:
-            self.norm = None
-        self.in_channel = in_channel
-        self.out_channel = out_channel
 
     def forward(self, x):
         B, C, H, W = x.shape
-        x = self.proj(x).flatten(2).transpose(1, 2).contiguous()  # B H*W C
-        if self.norm is not None:
-            x = self.norm(x)
-        return x
+        return self.proj(x).flatten(2).transpose(1, 2).contiguous()  # B H*W C
 
 
 class OutputProj(nn.Module):
@@ -515,7 +431,6 @@ class OutputProj(nn.Module):
         out_channel=3,
         kernel_size=3,
         stride=1,
-        norm_layer=None,
         act_layer=None,
     ):
         super().__init__()
@@ -530,22 +445,13 @@ class OutputProj(nn.Module):
         )
         if act_layer is not None:
             self.proj.add_module(act_layer(inplace=True))
-        if norm_layer is not None:
-            self.norm = norm_layer(out_channel)
-        else:
-            self.norm = None
-        self.in_channel = in_channel
-        self.out_channel = out_channel
 
     def forward(self, x):
         B, L, C = x.shape
         H = int(math.sqrt(L))
         W = int(math.sqrt(L))
         x = x.transpose(1, 2).view(B, C, H, W)
-        x = self.proj(x)
-        if self.norm is not None:
-            x = self.norm(x)
-        return x
+        return self.proj(x)
 
 
 class LeWinTransformerBlock(nn.Module):
@@ -598,7 +504,6 @@ class LeWinTransformerBlock(nn.Module):
                 qk_scale=qk_scale,
                 attn_drop=attn_drop,
                 proj_drop=drop,
-                token_projection=token_projection,
             )
             self.norm_cross = norm_layer(dim)
         else:
@@ -627,10 +532,9 @@ class LeWinTransformerBlock(nn.Module):
                 drop=drop,
             )
         elif token_mlp == "leff":
-            self.mlp = LeFF(dim, mlp_hidden_dim, act_layer=act_layer, drop=drop)
-
+            self.mlp = LeFF(dim, mlp_hidden_dim, act_layer=act_layer)
         elif token_mlp == "fastleff":
-            self.mlp = FastLeFF(dim, mlp_hidden_dim, act_layer=act_layer, drop=drop)
+            self.mlp = FastLeFF(dim, mlp_hidden_dim, act_layer=act_layer)
         else:
             raise Exception("FFN error!")
 
@@ -756,7 +660,6 @@ class LeWinTransformerBlock(nn.Module):
         # FFN
         x = shortcut + self.drop_path(x)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
-        del attn_mask
         return x
 
 
@@ -764,7 +667,6 @@ class BasicUformerLayer(nn.Module):
     def __init__(
         self,
         dim,
-        output_dim,
         input_resolution,
         depth,
         num_heads,
@@ -790,58 +692,33 @@ class BasicUformerLayer(nn.Module):
         self.depth = depth
         self.use_checkpoint = use_checkpoint
         # build blocks
-        if shift_flag:
-            self.blocks = nn.ModuleList(
-                [
-                    LeWinTransformerBlock(
-                        dim=dim,
-                        input_resolution=input_resolution,
-                        num_heads=num_heads,
-                        win_size=win_size,
-                        shift_size=0 if (i % 2 == 0) else win_size // 2,
-                        mlp_ratio=mlp_ratio,
-                        qkv_bias=qkv_bias,
-                        qk_scale=qk_scale,
-                        drop=drop,
-                        attn_drop=attn_drop,
-                        drop_path=(
-                            drop_path[i] if isinstance(drop_path, list) else drop_path
-                        ),
-                        norm_layer=norm_layer,
-                        token_projection=token_projection,
-                        token_mlp=token_mlp,
-                        modulator=modulator,
-                        cross_modulator=cross_modulator,
-                    )
-                    for i in range(depth)
-                ]
-            )
-        else:
-            self.blocks = nn.ModuleList(
-                [
-                    LeWinTransformerBlock(
-                        dim=dim,
-                        input_resolution=input_resolution,
-                        num_heads=num_heads,
-                        win_size=win_size,
-                        shift_size=0,
-                        mlp_ratio=mlp_ratio,
-                        qkv_bias=qkv_bias,
-                        qk_scale=qk_scale,
-                        drop=drop,
-                        attn_drop=attn_drop,
-                        drop_path=(
-                            drop_path[i] if isinstance(drop_path, list) else drop_path
-                        ),
-                        norm_layer=norm_layer,
-                        token_projection=token_projection,
-                        token_mlp=token_mlp,
-                        modulator=modulator,
-                        cross_modulator=cross_modulator,
-                    )
-                    for i in range(depth)
-                ]
-            )
+        self.blocks = nn.ModuleList(
+            [
+                LeWinTransformerBlock(
+                    dim=dim,
+                    input_resolution=input_resolution,
+                    num_heads=num_heads,
+                    win_size=win_size,
+                    shift_size=(
+                        0 if (not shift_flag or i % 2 == 0) else win_size // 2
+                    ),
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop,
+                    attn_drop=attn_drop,
+                    drop_path=(
+                        drop_path[i] if isinstance(drop_path, list) else drop_path
+                    ),
+                    norm_layer=norm_layer,
+                    token_projection=token_projection,
+                    token_mlp=token_mlp,
+                    modulator=modulator,
+                    cross_modulator=cross_modulator,
+                )
+                for i in range(depth)
+            ]
+        )
 
     def extra_repr(self) -> str:
         return f"dim={self.dim}, input_resolution={self.input_resolution}, depth={self.depth}"
@@ -872,7 +749,6 @@ class Uformer(nn.Module):
         attn_drop_rate=0.0,
         drop_path_rate=0.1,
         norm_layer=nn.LayerNorm,
-        patch_norm=True,
         use_checkpoint=False,
         token_projection="linear",
         token_mlp="leff",
@@ -886,14 +762,11 @@ class Uformer(nn.Module):
         super().__init__()
 
         self.num_enc_layers = len(depths) // 2
-        self.num_dec_layers = len(depths) // 2
         self.embed_dim = embed_dim
-        self.patch_norm = patch_norm
         self.mlp_ratio = mlp_ratio
         self.token_projection = token_projection
         self.mlp = token_mlp
         self.win_size = win_size
-        self.reso = img_size
         self.pos_drop = nn.Dropout(p=drop_rate)
         self.dd_in = dd_in
 
@@ -922,91 +795,38 @@ class Uformer(nn.Module):
         )
 
         # Encoder
-        self.encoderlayer_0 = BasicUformerLayer(
-            dim=embed_dim,
-            output_dim=embed_dim,
-            input_resolution=(img_size, img_size),
-            depth=depths[0],
-            num_heads=num_heads[0],
-            win_size=win_size,
-            mlp_ratio=self.mlp_ratio,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            drop=drop_rate,
-            attn_drop=attn_drop_rate,
-            drop_path=enc_dpr[sum(depths[:0]) : sum(depths[:1])],
-            norm_layer=norm_layer,
-            use_checkpoint=use_checkpoint,
-            token_projection=token_projection,
-            token_mlp=token_mlp,
-            shift_flag=shift_flag,
-        )
-        self.dowsample_0 = dowsample(embed_dim, embed_dim * 2)
-        self.encoderlayer_1 = BasicUformerLayer(
-            dim=embed_dim * 2,
-            output_dim=embed_dim * 2,
-            input_resolution=(img_size // 2, img_size // 2),
-            depth=depths[1],
-            num_heads=num_heads[1],
-            win_size=win_size,
-            mlp_ratio=self.mlp_ratio,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            drop=drop_rate,
-            attn_drop=attn_drop_rate,
-            drop_path=enc_dpr[sum(depths[:1]) : sum(depths[:2])],
-            norm_layer=norm_layer,
-            use_checkpoint=use_checkpoint,
-            token_projection=token_projection,
-            token_mlp=token_mlp,
-            shift_flag=shift_flag,
-        )
-        self.dowsample_1 = dowsample(embed_dim * 2, embed_dim * 4)
-        self.encoderlayer_2 = BasicUformerLayer(
-            dim=embed_dim * 4,
-            output_dim=embed_dim * 4,
-            input_resolution=(img_size // (2**2), img_size // (2**2)),
-            depth=depths[2],
-            num_heads=num_heads[2],
-            win_size=win_size,
-            mlp_ratio=self.mlp_ratio,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            drop=drop_rate,
-            attn_drop=attn_drop_rate,
-            drop_path=enc_dpr[sum(depths[:2]) : sum(depths[:3])],
-            norm_layer=norm_layer,
-            use_checkpoint=use_checkpoint,
-            token_projection=token_projection,
-            token_mlp=token_mlp,
-            shift_flag=shift_flag,
-        )
-        self.dowsample_2 = dowsample(embed_dim * 4, embed_dim * 8)
-        self.encoderlayer_3 = BasicUformerLayer(
-            dim=embed_dim * 8,
-            output_dim=embed_dim * 8,
-            input_resolution=(img_size // (2**3), img_size // (2**3)),
-            depth=depths[3],
-            num_heads=num_heads[3],
-            win_size=win_size,
-            mlp_ratio=self.mlp_ratio,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            drop=drop_rate,
-            attn_drop=attn_drop_rate,
-            drop_path=enc_dpr[sum(depths[:3]) : sum(depths[:4])],
-            norm_layer=norm_layer,
-            use_checkpoint=use_checkpoint,
-            token_projection=token_projection,
-            token_mlp=token_mlp,
-            shift_flag=shift_flag,
-        )
-        self.dowsample_3 = dowsample(embed_dim * 8, embed_dim * 16)
+        for i in range(self.num_enc_layers):
+            setattr(
+                self,
+                f"encoderlayer_{i}",
+                BasicUformerLayer(
+                    dim=embed_dim * 2**i,
+                    input_resolution=(img_size // (2**i), img_size // (2**i)),
+                    depth=depths[i],
+                    num_heads=num_heads[i],
+                    win_size=win_size,
+                    mlp_ratio=self.mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop_rate,
+                    attn_drop=attn_drop_rate,
+                    drop_path=enc_dpr[sum(depths[:i]) : sum(depths[: i + 1])],
+                    norm_layer=norm_layer,
+                    use_checkpoint=use_checkpoint,
+                    token_projection=token_projection,
+                    token_mlp=token_mlp,
+                    shift_flag=shift_flag,
+                ),
+            )
+            setattr(
+                self,
+                f"dowsample_{i}",
+                dowsample(embed_dim * 2**i, embed_dim * 2 ** (i + 1)),
+            )
 
         # Bottleneck
         self.conv = BasicUformerLayer(
-            dim=embed_dim * 16,
-            output_dim=embed_dim * 16,
+            dim=embed_dim * 2**4,
             input_resolution=(img_size // (2**4), img_size // (2**4)),
             depth=depths[4],
             num_heads=num_heads[4],
@@ -1025,94 +845,39 @@ class Uformer(nn.Module):
         )
 
         # Decoder
-        self.upsample_0 = upsample(embed_dim * 16, embed_dim * 8)
-        self.decoderlayer_0 = BasicUformerLayer(
-            dim=embed_dim * 16,
-            output_dim=embed_dim * 16,
-            input_resolution=(img_size // (2**3), img_size // (2**3)),
-            depth=depths[5],
-            num_heads=num_heads[5],
-            win_size=win_size,
-            mlp_ratio=self.mlp_ratio,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            drop=drop_rate,
-            attn_drop=attn_drop_rate,
-            drop_path=dec_dpr[: depths[5]],
-            norm_layer=norm_layer,
-            use_checkpoint=use_checkpoint,
-            token_projection=token_projection,
-            token_mlp=token_mlp,
-            shift_flag=shift_flag,
-            modulator=modulator,
-            cross_modulator=cross_modulator,
-        )
-        self.upsample_1 = upsample(embed_dim * 16, embed_dim * 4)
-        self.decoderlayer_1 = BasicUformerLayer(
-            dim=embed_dim * 8,
-            output_dim=embed_dim * 8,
-            input_resolution=(img_size // (2**2), img_size // (2**2)),
-            depth=depths[6],
-            num_heads=num_heads[6],
-            win_size=win_size,
-            mlp_ratio=self.mlp_ratio,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            drop=drop_rate,
-            attn_drop=attn_drop_rate,
-            drop_path=dec_dpr[sum(depths[5:6]) : sum(depths[5:7])],
-            norm_layer=norm_layer,
-            use_checkpoint=use_checkpoint,
-            token_projection=token_projection,
-            token_mlp=token_mlp,
-            shift_flag=shift_flag,
-            modulator=modulator,
-            cross_modulator=cross_modulator,
-        )
-        self.upsample_2 = upsample(embed_dim * 8, embed_dim * 2)
-        self.decoderlayer_2 = BasicUformerLayer(
-            dim=embed_dim * 4,
-            output_dim=embed_dim * 4,
-            input_resolution=(img_size // 2, img_size // 2),
-            depth=depths[7],
-            num_heads=num_heads[7],
-            win_size=win_size,
-            mlp_ratio=self.mlp_ratio,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            drop=drop_rate,
-            attn_drop=attn_drop_rate,
-            drop_path=dec_dpr[sum(depths[5:7]) : sum(depths[5:8])],
-            norm_layer=norm_layer,
-            use_checkpoint=use_checkpoint,
-            token_projection=token_projection,
-            token_mlp=token_mlp,
-            shift_flag=shift_flag,
-            modulator=modulator,
-            cross_modulator=cross_modulator,
-        )
-        self.upsample_3 = upsample(embed_dim * 4, embed_dim)
-        self.decoderlayer_3 = BasicUformerLayer(
-            dim=embed_dim * 2,
-            output_dim=embed_dim * 2,
-            input_resolution=(img_size, img_size),
-            depth=depths[8],
-            num_heads=num_heads[8],
-            win_size=win_size,
-            mlp_ratio=self.mlp_ratio,
-            qkv_bias=qkv_bias,
-            qk_scale=qk_scale,
-            drop=drop_rate,
-            attn_drop=attn_drop_rate,
-            drop_path=dec_dpr[sum(depths[5:8]) : sum(depths[5:9])],
-            norm_layer=norm_layer,
-            use_checkpoint=use_checkpoint,
-            token_projection=token_projection,
-            token_mlp=token_mlp,
-            shift_flag=shift_flag,
-            modulator=modulator,
-            cross_modulator=cross_modulator,
-        )
+        for i in range(self.num_enc_layers):
+            setattr(
+                self,
+                f"upsample_{i}",
+                upsample(
+                    embed_dim * (16 if i == 0 else 2 ** (5 - i)),
+                    embed_dim * 2 ** (3 - i),
+                ),
+            )
+            setattr(
+                self,
+                f"decoderlayer_{i}",
+                BasicUformerLayer(
+                    dim=embed_dim * 2 ** (4 - i),
+                    input_resolution=(img_size // (2 ** (3 - i)),) * 2,
+                    depth=depths[5 + i],
+                    num_heads=num_heads[5 + i],
+                    win_size=win_size,
+                    mlp_ratio=self.mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop_rate,
+                    attn_drop=attn_drop_rate,
+                    drop_path=dec_dpr[sum(depths[5 : 5 + i]) : sum(depths[5 : 6 + i])],
+                    norm_layer=norm_layer,
+                    use_checkpoint=use_checkpoint,
+                    token_projection=token_projection,
+                    token_mlp=token_mlp,
+                    shift_flag=shift_flag,
+                    modulator=modulator,
+                    cross_modulator=cross_modulator,
+                ),
+            )
 
         self.apply(self._init_weights)
 
